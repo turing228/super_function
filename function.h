@@ -9,14 +9,11 @@
 #include <functional>
 #include <iostream>
 #include <new>
+#include <memory>
 #include <utility>
 #include <array>
 #include <variant>
 #include <any>
-
-
-typedef std::aligned_storage<sizeof(10), alignof(10)>::type Buffer;
-Buffer buffer;
 
 template<typename Signature>
 struct function;
@@ -24,26 +21,36 @@ struct function;
 template<typename T, typename ...Args>
 struct function<T(Args...)> {
 
-    function() noexcept : pointer() {}
+    function() noexcept : type(1), big(nullptr) {}
 
-    function(std::nullptr_t) noexcept : pointer() {}
+    function(nullptr_t) noexcept : type(1), big(nullptr) {}
 
-    function(const function &other) : pointer(other.pointer) {
-        if (other != Pointer()) {
-            other.getImplementation().copy(static_cast<void *>(pointer.data()));
+    function(function const &other) : type(other.type) {
+        if (type == 0) {
+            other.getImplementation()->copy(small);
+        } else {
+            big = other.big->copy();
         }
     }
 
-    function(function &&other) noexcept : pointer(other.pointer) {
-        other.pointer = Pointer();
+    function(function &&other) : type(1), big(nullptr) {
+        swap(other);
+        other.~function();
     }
 
     template<typename F>
-    function(const F &f) {
-        new(pointer.data()) Implementation<F>(f);
+    function(F function) {
+        if (sizeof(F) <= smallSize) {
+            type = 0;
+            new(small)Implementation<F>(std::move(function));
+        } else {
+            type = 1;
+            big = std::make_unique<Implementation < F>>
+            (std::move(function));
+        }
     }
 
-    function &operator=(const function &other) {
+    function &operator=(function const &other) {
         function(other).swap(*this);
         return *this;
     }
@@ -53,96 +60,92 @@ struct function<T(Args...)> {
         return *this;
     }
 
+    explicit operator bool() const noexcept {
+        if (big == nullptr) {
+            return true;
+        }
+        return false;
+    }
+
     ~function() {
-        if (pointer != Pointer()) {
-            getImplementation().~Base();
+        if (type == 0) {
+            getImplementation()->~Base();
+        } else {
+            big.reset();
         }
     }
 
     T operator()(Args &&...args) const {
-        if (pointer == Pointer()) {
+        if (big == nullptr) {
             throw std::bad_function_call();
         }
-        return getImplementation().runFunction(std::forward<Args>(args)...);
+        if (type == 0) {
+            return reinterpret_cast<Base *>(const_cast<char *>(small))->runFunction(std::forward<Args>(args)...);
+//            return getImplementation()->runFunction(std::forward<Args>(args)...);
+        } else {
+            return big->runFunction(std::forward<Args>(args)...);
+        }
     }
 
     void swap(function &other) noexcept {
-        std::swap(pointer, other.pointer);
+        std::swap(type, other.type);
+        std::swap(small, other.small);
     }
 
 private:
+    struct Base;
 
-    typedef std::array<long int, 4> Pointer;
-    Pointer pointer;
+    template<typename F>
+    struct Implementation;
+
+
+    char type;
+    static const int smallSize = 96;
+
+    union {
+        std::unique_ptr<Base> big;
+        char small[smallSize];
+    };
+
 
     struct Base {
-        virtual ~Base() {}
+    public:
+        Base() = default;
 
-        virtual T runFunction(Args &&...args) const = 0;
+        virtual ~Base() = default;
+
+        virtual T runFunction(Args &&...args) = 0;
 
         virtual void copy(void *where) const = 0;
+
+        virtual std::unique_ptr<Base> copy() const = 0;
     };
 
-/*
-    struct small_buffer{
-        std::aligned_storage<sizeof(char[10]),alignof(char[10])> storage;
-    };*/
-    struct small_buffer {
-        typename std::aligned_storage<10, 2>::type *storage;
-        //char storage[10];
-    };
 
     template<typename F>
     struct Implementation : Base {
 
-        std::any f;
-        int type;
+        explicit Implementation(F const &function) : f(function) {}
 
-//        Implementation(){
-//            t = std::move(F());
-//        }
-
-        Implementation(const F &func) : f() {
-            if (sizeof(func) * alignof(func) > 10) {
-                f = func;
-                type = 0;
-            } else {
-                small_buffer small;
-                new(small.storage) F(func);
-                f = small;
-                type = 1;
-            }
-        }
-
-        T runFunction(Args &&...args) const override final {
-            if (type == 0) {
-                return std::any_cast<F>(f)(std::forward<Args>(args)...);
-            }
-            //std::cout<< "TYPE:" << f.type().name() << "<<<";
-//            return reinterpret_cast<F> (std::any_cast<small_buffer>(f).storage) (std::forward<Args>(args)...);
-//            return (reinterpret_cast<F>(std::any_cast<small_buffer>(f).storage))->invoke(args...);
-            return (reinterpret_cast<F &> (*std::any_cast<small_buffer>(f).storage))(std::forward<Args>(args)...);
-//            if (declval(f) == small_buffer::type) {
-//                return reinterpret_cast<T>(std::any_cast<T>(f)) (std::forward<Args>(args)...);
-//            }
-//            return std::any_cast<T>
-//            if (std::holds_alternative<small_buffer>(f)){
-//                return reinterpret_cast<T>(std::get<small_buffer>(f)) (std::forward<Args>(args)...);
-//            }
-//            return std::get<F>(f) (std::forward<Args>(args)...);
+        virtual T runFunction(Args &&...args) override final {
+            return f(std::forward<Args>(args)...);
         }
 
         void copy(void *where) const override final { new(where) Implementation<F>(*this); }
+
+        std::unique_ptr<Base> copy() const override final {
+            return std::make_unique<Implementation<F>>(f);
+        }
+
+        F f;
     };
 
-    const Base &getImplementation() const {
-        assert(pointer != Pointer());
-        return *static_cast<const Base *>(static_cast<const void *>(pointer.data()));
+    const Base *getImplementation() const {
+        return reinterpret_cast<const Base *>(static_cast<const void *>(small));
     }
 
-    Base &getImplementation() {
-        assert(pointer != Pointer());
-        return *static_cast<Base *>(static_cast<void *>(pointer.data()));
+    Base *getImplementation() {
+        return reinterpret_cast<Base *>(static_cast<void *>(small));
     }
 };
 
