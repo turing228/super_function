@@ -23,14 +23,6 @@ std::string functionPointer(double n) {
     return "FunctionPointer is executed.";
 };
 
-int a() {
-    return 1;
-}
-
-double e() {
-    return 2.28;
-}
-
 struct functionObject {
     std::string s1 = "FunctionObject ";
     std::string s2 = "is executed";
@@ -45,14 +37,21 @@ struct functionObject {
     }
 };
 
+int getInt() {
+    return 1;
+}
+
+double getDouble() {
+    return 2.28;
+}
 
 int main() {
 
-    function<int()> fa(a);
-    std::cout << fa();
-    fa = e;
-    std::cout << fa();
-    std::cout << e();
+    function<int()> functionGetInt(getInt);
+    std::cout << functionGetInt();
+    functionGetInt = getDouble;
+    std::cout << functionGetInt();
+    std::cout << getDouble();
 
     function<std::string()> functionFromFOstd(functionObject());
     std::cout << functionFromFOstd << std::endl;

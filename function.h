@@ -21,9 +21,9 @@ struct function;
 template<typename T, typename ...Args>
 struct function<T(Args...)> {
 
-    function() noexcept : type(1), big(nullptr) {}
+    function() noexcept : type(-1), big(nullptr) {}
 
-    function(nullptr_t) noexcept : type(1), big(nullptr) {}
+    function(nullptr_t) noexcept : type(-1), big(nullptr) {}
 
     function(function const &other) : type(other.type) {
         if (type == 0) {
@@ -33,7 +33,7 @@ struct function<T(Args...)> {
         }
     }
 
-    function(function &&other) : type(1), big(nullptr) {
+    function(function &&other) : type(-1), big(nullptr) {
         swap(other);
         other.~function();
     }
@@ -76,7 +76,7 @@ struct function<T(Args...)> {
     }
 
     T operator()(Args &&...args) const {
-        if (big == nullptr) {
+        if (type == -1) {
             throw std::bad_function_call();
         }
         if (type == 0) {
